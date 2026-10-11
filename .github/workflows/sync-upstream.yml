@@ -1,0 +1,64 @@
+name: Sincronizar NexoPOS original
+
+# El fork público se actualiza; NexoPOSblock (archivado) y retail-pos NO se tocan.
+on:
+  schedule:
+    - cron: '23 7 * * 1' # Lunes, 07:23 UTC
+  workflow_dispatch:
+  # Prueba inicial al instalar o editar ESTE workflow; no se dispara
+  # por cambios normales de código ni por la sincronización del upstream.
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/sync-upstream.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nexopos-fork-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sincronizar fork público (solo master)
+    if: github.repository == 'red-telecom/NexoPOS'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Comprobar repositorio, rama y origen oficial
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "red-telecom/NexoPOS"
+          test "$GITHUB_REF" = "refs/heads/master"
+          parent="$(gh api "repos/$GITHUB_REPOSITORY" --jq '.parent.full_name')"
+          if [ "$parent" != "Blair2004/NexoPOS" ]; then
+            echo "::error::El fork no apunta al NexoPOS oficial. Sincronización bloqueada."
+            exit 1
+          fi
+
+      - name: Sincronizar desde Blair2004/NexoPOS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(gh api "repos/$GITHUB_REPOSITORY/branches/master" --jq '.commit.sha')"
+          response="$(gh api --method POST "repos/$GITHUB_REPOSITORY/merge-upstream" -f branch=master)"
+          after="$(gh api "repos/$GITHUB_REPOSITORY/branches/master" --jq '.commit.sha')"
+          merge_type="$(jq -r '.merge_type // "desconocido"' <<< "$response")"
+          origin="$(jq -r '.base_branch // "desconocido"' <<< "$response")"
+          {
+            echo "## Sincronización NexoPOS"
+            echo ""
+            echo "- Fork: \`$GITHUB_REPOSITORY\`"
+            echo "- Origen reportado por GitHub: \`$origin\`"
+            echo "- Resultado: \`$merge_type\`"
+            echo "- Antes: \`$before\`"
+            echo "- Después: \`$after\`"
+            echo "- NexoPOSblock y TPV privado: **sin cambios**"
+          } >> "$GITHUB_STEP_SUMMARY"
